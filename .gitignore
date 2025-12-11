@@ -1,2 +1,5 @@
 node_modules
 .env
+note.js
+delete.js
+clubsphere-firebase-adminsdk.json
