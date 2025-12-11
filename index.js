@@ -95,10 +95,38 @@ async function run() {
     /* -------------------------------------------------------------------------- */
     /*                               // !Club Api's                               */
     /* -------------------------------------------------------------------------- */
-    app.post("/clubs", async (req, res) => {
+    // app.post("/clubs", async (req, res) => {
+    //   const clubData = req.body;
+    //   const result = await clubCollection.insertOne(clubData);
+    //   res.send(result);
+    // });
+
+    // POST /clubs - Create club (manager)
+    app.post("/clubs", verifyFBToken, async (req, res) => {
       const clubData = req.body;
+
+      // Manager only
+      const managerEmail = req.decoded_email; // Firebase verified token
+      clubData.managerEmail = managerEmail;
+      clubData.status = "pending";
+      clubData.createdAt = new Date().toISOString();
+      clubData.updatedAt = new Date().toISOString();
+
       const result = await clubCollection.insertOne(clubData);
       res.send(result);
+    });
+
+    // PATCH /clubs/:id/status
+    app.patch("/clubs/:id/status", verifyFBToken, async (req, res) => {
+      const { status } = req.body;
+      const id = req.params.id;
+
+      const result = await clubCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status, updatedAt: new Date().toISOString() } }
+      );
+
+      res.json(result);
     });
 
     app.get("/clubs/:id", async (req, res) => {
