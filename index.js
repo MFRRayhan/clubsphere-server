@@ -63,6 +63,7 @@ async function run() {
     const userCollection = db.collection("users");
     const membershipCollection = db.collection("memberships");
     const eventParticipationCollection = db.collection("eventParticipants");
+    const paymentCollection = db.collection("payments");
 
     /* ------------------------------ Club APIs ------------------------------ */
 
@@ -476,7 +477,7 @@ async function run() {
           line_items: [
             {
               price_data: {
-                currency: "usd",
+                currency: "BDT",
                 product_data: { name: event.eventName },
                 unit_amount: event.eventFee * 100,
               },
@@ -504,7 +505,7 @@ async function run() {
           line_items: [
             {
               price_data: {
-                currency: "usd",
+                currency: "BDT",
                 product_data: { name: `Membership - ${club.clubName}` },
                 unit_amount: club.membershipFee * 100,
               },
@@ -518,6 +519,57 @@ async function run() {
         res.json({ url: session.url });
       } catch (error) {
         res.status(500).json({ error: error.message });
+      }
+    });
+
+    /* -------------------------------------------------------------------------- */
+    /*                               !Payment API's                               */
+    /* -------------------------------------------------------------------------- */
+
+    // Save a new payment record for the logged-in user
+    app.post("/payments", verifyFBToken, async (req, res) => {
+      const paymentData = req.body;
+      const userEmail = req.decoded_email;
+
+      if (!paymentData.transactionId || !paymentData.amount) {
+        return res.status(400).send({
+          message: "Missing required payment details (transactionId or amount)",
+        });
+      }
+
+      const fullPaymentData = {
+        ...paymentData,
+        userEmail,
+        paidAt: new Date().toISOString(),
+      };
+
+      try {
+        const result = await paymentCollection.insertOne(fullPaymentData);
+        res.send(result);
+      } catch (error) {
+        console.error("Error saving payment record:", error);
+        res
+          .status(500)
+          .send({ message: "Failed to save payment record on server." });
+      }
+    });
+
+    // Payment History API - Get all payments for the logged-in user
+    app.get("/payments/history", verifyFBToken, async (req, res) => {
+      try {
+        const userEmail = req.decoded_email;
+
+        const payments = await paymentCollection
+          .find({ userEmail })
+          .sort({ paidAt: -1 })
+          .toArray();
+
+        res.send(payments);
+      } catch (error) {
+        console.error("Error fetching payment history:", error);
+        res
+          .status(500)
+          .send({ message: "Server error while fetching payments." });
       }
     });
 
