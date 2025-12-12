@@ -368,6 +368,42 @@ async function run() {
       }
     });
 
+    app.delete("/event-participants/:id", verifyFBToken, async (req, res) => {
+      const participationId = req.params.id;
+      const userEmail = req.decoded_email;
+
+      if (!ObjectId.isValid(participationId)) {
+        return res
+          .status(400)
+          .send({ message: "Invalid participation ID format." });
+      }
+
+      try {
+        const query = {
+          _id: new ObjectId(participationId),
+          userEmail: userEmail,
+        };
+
+        const result = await eventParticipationCollection.deleteOne(query);
+
+        if (result.deletedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Participation record not found." });
+        }
+
+        res.send({
+          deletedCount: result.deletedCount,
+          message: "Successfully unjoined the event.",
+        });
+      } catch (error) {
+        console.error("Error deleting participation record:", error);
+        res
+          .status(500)
+          .send({ message: "Server error during unjoin operation." });
+      }
+    });
+
     /* ------------------------------- Users APIs ----------------------------- */
 
     app.post("/users", async (req, res) => {
