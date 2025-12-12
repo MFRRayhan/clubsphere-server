@@ -62,6 +62,7 @@ async function run() {
     const clubCollection = db.collection("clubs");
     const userCollection = db.collection("users");
     const membershipCollection = db.collection("memberships");
+    const eventParticipationCollection = db.collection("eventParticipants");
 
     /* ------------------------------ Club APIs ------------------------------ */
 
@@ -283,6 +284,88 @@ async function run() {
       const id = req.params.id;
       const result = await eventCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
+    });
+
+    // Get participation status for a specific event and user
+    app.get(
+      "/events/check-participant/:eventId",
+      verifyFBToken,
+      async (req, res) => {
+        const { eventId } = req.params;
+        const userEmail = req.decoded_email;
+
+        try {
+          const participation = await eventParticipationCollection.findOne({
+            eventId,
+            userEmail,
+          });
+
+          res.json({ isParticipant: !!participation });
+        } catch (error) {
+          console.error(error);
+          res.status(500).json({ message: "Server error checking status" });
+        }
+      }
+    );
+
+    // Record user participation after successful payment
+    app.post("/event-participants", verifyFBToken, async (req, res) => {
+      const { eventId, eventName, eventFee } = req.body;
+      const userEmail = req.decoded_email;
+
+      if (!eventId || !eventName) {
+        return res.status(400).send({ message: "Missing required fields" });
+      }
+
+      const existing = await eventParticipationCollection.findOne({
+        userEmail,
+        eventId,
+      });
+
+      if (existing) {
+        return res
+          .status(200)
+          .send({ message: "Already recorded as participant" });
+      }
+
+      const participationData = {
+        eventId,
+        eventName,
+        userEmail,
+        status: "paid",
+        fee: eventFee,
+        joinDate: new Date().toISOString(),
+      };
+
+      const result = await eventParticipationCollection.insertOne(
+        participationData
+      );
+      res.send(result);
+    });
+
+    // Get all participations for the logged-in user
+    app.get("/my-participations", verifyFBToken, async (req, res) => {
+      try {
+        const userEmail = req.decoded_email;
+
+        if (!userEmail) {
+          return res
+            .status(401)
+            .send({ message: "Unauthorized access: Missing email." });
+        }
+
+        const participations = await eventParticipationCollection
+          .find({ userEmail })
+          .sort({ joinDate: -1 })
+          .toArray();
+
+        res.send(participations);
+      } catch (error) {
+        console.error("Error fetching event participations:", error);
+        res
+          .status(500)
+          .send({ message: "Server error while fetching participations." });
+      }
     });
 
     /* ------------------------------- Users APIs ----------------------------- */
