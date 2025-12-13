@@ -563,6 +563,117 @@ async function run() {
       }
     });
 
+    // Manager → get all active events with registrations
+    app.get(
+      "/manager/my-active-events-with-registrations",
+      verifyFBToken,
+      async (req, res) => {
+        try {
+          const managerEmail = req.decoded_email;
+
+          const manager = await userCollection.findOne({ email: managerEmail });
+          if (!manager || manager.role !== "clubManager") {
+            return res.status(403).send({ message: "Forbidden access" });
+          }
+
+          const events = await eventCollection
+            .find({ "eventCreator.email": managerEmail })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+          const eventsWithRegistrations = await Promise.all(
+            events.map(async (event) => {
+              const participants = await eventParticipationCollection
+                .aggregate([
+                  { $match: { eventId: event._id.toString() } }, // string match
+                  {
+                    $lookup: {
+                      from: "users",
+                      localField: "userEmail",
+                      foreignField: "email",
+                      as: "userInfo",
+                    },
+                  },
+                  {
+                    $unwind: {
+                      path: "$userInfo",
+                      preserveNullAndEmptyArrays: true,
+                    },
+                  },
+                  {
+                    $project: {
+                      _id: 1,
+                      userEmail: 1,
+                      status: 1,
+                      fee: 1,
+                      joinDate: 1,
+                      userName: {
+                        $ifNull: ["$userInfo.displayName", "$userEmail"],
+                      },
+                    },
+                  },
+                ])
+                .toArray();
+
+              return {
+                ...event,
+                participants,
+              };
+            })
+          );
+
+          res.json(eventsWithRegistrations);
+        } catch (error) {
+          console.error(error);
+          res.status(500).json({ message: "Server error" });
+        }
+      }
+    );
+
+    // Manager kicks a participant from an event
+    app.delete(
+      "/manager/event-participants/:eventId/:participantId",
+      verifyFBToken,
+      async (req, res) => {
+        const { eventId, participantId } = req.params;
+        const managerEmail = req.decoded_email;
+
+        if (!ObjectId.isValid(participantId)) {
+          return res.status(400).json({ message: "Invalid participant ID" });
+        }
+
+        try {
+          // 1️⃣ Check if manager owns the event
+          const event = await eventCollection.findOne({
+            _id: new ObjectId(eventId),
+            "eventCreator.email": managerEmail,
+          });
+
+          if (!event) {
+            return res.status(403).json({ message: "Forbidden access" });
+          }
+
+          // 2️⃣ Delete participant
+          const result = await eventParticipationCollection.deleteOne({
+            _id: new ObjectId(participantId),
+          });
+
+          if (result.deletedCount === 0) {
+            return res
+              .status(404)
+              .json({ message: "Participant not found in this event" });
+          }
+
+          res.json({ message: "Participant kicked successfully" });
+        } catch (error) {
+          console.error("Error kicking participant:", error);
+          res
+            .status(500)
+            .json({ message: "Server error while kicking participant" });
+        }
+      }
+    );
+
     /* ------------------------------- Users APIs ----------------------------- */
 
     app.post("/users", async (req, res) => {
