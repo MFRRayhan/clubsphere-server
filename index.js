@@ -440,9 +440,15 @@ async function run() {
           maxAttendees: maxAttendees || null,
           eventBanner,
           eventCategory,
+
+          status: "pending",
+          approvedBy: null,
+
           createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+
           eventCreator: {
-            name: req.decoded_email,
+            name: eventCreator?.name || null,
             email: req.decoded_email,
             image: eventCreator?.image || null,
           },
@@ -456,9 +462,47 @@ async function run() {
       }
     });
 
+    app.get("/admin/events", verifyFBToken, verifyAdmin, async (req, res) => {
+      const status = req.query.status || "pending";
+      const events = await eventCollection
+        .find({ status })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.send(events);
+    });
+
+    app.patch(
+      "/admin/events/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { status } = req.body;
+        const id = req.params.id;
+
+        if (!["approved", "rejected"].includes(status)) {
+          return res.status(400).send({ message: "Invalid status" });
+        }
+
+        const result = await eventCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status,
+              approvedBy: req.decoded_email,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+        );
+
+        res.send(result);
+      }
+    );
+
     app.get("/events", async (req, res) => {
       const query = {};
       if (req.query.email) query["eventCreator.email"] = req.query.email;
+      if (req.query.status) query.status = req.query.status;
 
       const result = await eventCollection
         .find(query)
@@ -667,7 +711,7 @@ async function run() {
           }
 
           const events = await eventCollection
-            .find({ "eventCreator.email": managerEmail })
+            .find({ "eventCreator.email": managerEmail, status: "approved" })
             .sort({ createdAt: -1 })
             .toArray();
 
@@ -808,15 +852,20 @@ async function run() {
       res.json(users);
     });
 
-    app.patch("/users/:id/role", async (req, res) => {
-      const result = await userCollection.updateOne(
-        { _id: new ObjectId(req.params.id) },
-        { $set: { role: req.body.role } }
-      );
-      res.json(result);
-    });
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { role: req.body.role } }
+        );
+        res.json(result);
+      }
+    );
 
-    app.delete("/users/:id", async (req, res) => {
+    app.delete("/users/:id", verifyFBToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
