@@ -65,6 +65,7 @@ async function run() {
     const eventParticipationCollection = db.collection("eventParticipants");
     const paymentCollection = db.collection("payments");
 
+    // Verify Admin
     const verifyAdmin = async (req, res, next) => {
       try {
         const email = req.decoded_email;
@@ -83,6 +84,30 @@ async function run() {
       } catch (error) {
         console.error("verifyAdmin error:", error);
         res.status(500).send({ message: "Admin verification failed" });
+      }
+    };
+
+    // Verify ClubManager
+    const verifyManager = async (req, res, next) => {
+      try {
+        const email = req.decoded_email;
+
+        if (!email) {
+          return res.status(401).send({ message: "Unauthorized" });
+        }
+
+        const user = await userCollection.findOne({ email });
+
+        if (!user || user.role !== "clubManager") {
+          return res
+            .status(403)
+            .send({ message: "Forbidden: ClubManager only" });
+        }
+
+        next();
+      } catch (error) {
+        console.error("verifyClubManager error:", error);
+        res.status(500).send({ message: "ClubManager verification failed" });
       }
     };
 
@@ -1067,6 +1092,134 @@ async function run() {
       } catch (error) {
         console.error("Error updating member status:", error);
         res.status(500).json({ message: "Server error while updating status" });
+      }
+    });
+
+    /* --------------------------- Admin Dashboard stats API -------------------------- */
+    app.get(
+      "/admin/dashboard-stats",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const totalUsers = await userCollection.countDocuments();
+          const totalClubs = await clubCollection.countDocuments();
+          const totalEvents = await eventCollection.countDocuments();
+
+          const pendingClubs = await clubCollection.countDocuments({
+            status: "pending",
+          });
+
+          const pendingEvents = await eventCollection.countDocuments({
+            status: "pending",
+          });
+
+          const payments = await paymentCollection.find({}).toArray();
+          const totalPayments = payments.length;
+          const totalRevenue = payments.reduce(
+            (sum, p) => sum + Number(p.amount || 0),
+            0
+          );
+
+          res.send({
+            totalUsers,
+            totalClubs,
+            totalEvents,
+            pendingApprovals: pendingClubs + pendingEvents,
+            pendingClubs,
+            pendingEvents,
+            totalPayments,
+            totalRevenue,
+          });
+        } catch (error) {
+          console.error("Dashboard stats error:", error);
+          res.status(500).send({ message: "Failed to load dashboard stats" });
+        }
+      }
+    );
+
+    /* --------------------------- Club Manager Dashboard stats API -------------------------- */
+    app.get(
+      "/manager/dashboard-stats",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const managerEmail = req.decoded_email;
+
+          const managedClubs = await clubCollection
+            .find({ managerEmail })
+            .toArray();
+
+          const clubIds = managedClubs.map((c) => c._id.toString());
+
+          const totalMembers = await membershipCollection.countDocuments({
+            clubId: { $in: clubIds },
+            status: "active",
+          });
+
+          const managedEvents = await eventCollection
+            .find({ "eventCreator.email": managerEmail })
+            .toArray();
+
+          const eventIds = managedEvents.map((e) => e._id.toString());
+
+          const totalRegistrations =
+            await eventParticipationCollection.countDocuments({
+              eventId: { $in: eventIds },
+            });
+
+          const payments = await paymentCollection
+            .find({
+              $or: [
+                { clubId: { $in: clubIds } },
+                { eventId: { $in: eventIds } },
+              ],
+            })
+            .toArray();
+
+          const totalPayments = payments.length;
+          const totalRevenue = payments.reduce(
+            (sum, p) => sum + Number(p.amount || 0),
+            0
+          );
+
+          res.send({
+            totalClubs: managedClubs.length,
+            totalMembers,
+            totalEvents: managedEvents.length,
+            totalRegistrations,
+            totalPayments,
+            totalRevenue,
+          });
+        } catch (error) {
+          console.error("Manager dashboard error:", error);
+          res.status(500).send({ message: "Failed to load manager stats" });
+        }
+      }
+    );
+
+    /* --------------------------- Member Dashboard stats API -------------------------- */
+    app.get("/member/dashboard-stats", verifyFBToken, async (req, res) => {
+      try {
+        const userEmail = req.decoded_email;
+
+        const totalClubs = await membershipCollection.countDocuments({
+          userEmail,
+          status: "active",
+        });
+
+        const totalEvents = await eventParticipationCollection.countDocuments({
+          userEmail,
+        });
+
+        res.send({
+          totalClubs,
+          totalEvents,
+        });
+      } catch (error) {
+        console.error("Member dashboard error:", error);
+        res.status(500).send({ message: "Failed to load member stats" });
       }
     });
 
