@@ -284,6 +284,27 @@ async function run() {
       }
     });
 
+    app.get(
+      "/manager/payments",
+      verifyFBToken,
+      verifyManager,
+      async (req, res) => {
+        try {
+          const managerEmail = req.decoded_email;
+
+          const payments = await paymentCollection
+            .find({ managerEmail })
+            .sort({ paidAt: -1 })
+            .toArray();
+
+          res.status(200).json(payments);
+        } catch (error) {
+          console.error("Manager payment error:", error);
+          res.status(500).json({ message: "Failed to load payments" });
+        }
+      }
+    );
+
     // Update full club details
     app.patch("/clubs/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
@@ -1002,30 +1023,48 @@ async function run() {
 
     // Save a new payment record for the logged-in user
     app.post("/payments", verifyFBToken, async (req, res) => {
-      const paymentData = req.body;
+      const { transactionId, amount, paymentType, clubId, eventId } = req.body;
       const userEmail = req.decoded_email;
+      let managerEmail = null;
+      let clubName = null;
 
-      if (!paymentData.transactionId || !paymentData.amount) {
-        return res.status(400).send({
-          message: "Missing required payment details (transactionId or amount)",
+      if (clubId) {
+        const club = await clubCollection.findOne({
+          _id: new ObjectId(clubId),
         });
+        if (!club) return res.status(404).send({ message: "Club not found" });
+
+        managerEmail = club.managerEmail;
+        clubName = club.clubName;
       }
 
-      const fullPaymentData = {
-        ...paymentData,
+      if (eventId) {
+        const event = await eventCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+        if (!event) return res.status(404).send({ message: "Event not found" });
+
+        managerEmail = event.eventCreator.email;
+        clubName = event.clubName;
+      }
+
+      if (!managerEmail)
+        return res.status(400).send({ message: "Manager email missing" });
+
+      const paymentData = {
+        transactionId,
+        amount,
+        paymentType,
+        clubId: clubId || null,
+        eventId: eventId || null,
+        clubName,
+        managerEmail,
         userEmail,
         paidAt: new Date().toISOString(),
       };
 
-      try {
-        const result = await paymentCollection.insertOne(fullPaymentData);
-        res.send(result);
-      } catch (error) {
-        console.error("Error saving payment record:", error);
-        res
-          .status(500)
-          .send({ message: "Failed to save payment record on server." });
-      }
+      const result = await paymentCollection.insertOne(paymentData);
+      res.status(201).json(result);
     });
 
     // get payment history for Admin
