@@ -21,7 +21,7 @@ admin.initializeApp({
 // Middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"],
+    origin: ["https://clubsphere-69228.web.app"],
     credentials: true,
     optionsSuccessStatus: 200,
   })
