@@ -126,17 +126,22 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/clubs/:id/status", verifyFBToken, async (req, res) => {
-      const { status } = req.body;
-      const id = req.params.id;
+    app.patch(
+      "/clubs/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { status } = req.body;
+        const id = req.params.id;
 
-      const result = await clubCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status, updatedAt: new Date().toISOString() } }
-      );
+        const result = await clubCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status, updatedAt: new Date().toISOString() } }
+        );
 
-      res.json(result);
-    });
+        res.json(result);
+      }
+    );
 
     app.get("/clubs/:id", async (req, res) => {
       const id = req.params.id;
@@ -158,10 +163,46 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/clubs/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await clubCollection.deleteOne({ _id: new ObjectId(id) });
-      res.send(result);
+    app.delete("/clubs/:id", verifyFBToken, async (req, res) => {
+      const clubId = req.params.id;
+      const email = req.decoded_email;
+
+      if (!ObjectId.isValid(clubId)) {
+        return res.status(400).json({ message: "Invalid club ID" });
+      }
+
+      try {
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const club = await clubCollection.findOne({
+          _id: new ObjectId(clubId),
+        });
+
+        if (!club) {
+          return res.status(404).json({ message: "Club not found" });
+        }
+
+        const isAdmin = user.role === "admin";
+        const isManagerOwner =
+          user.role === "clubManager" && club.managerEmail === email;
+
+        if (!isAdmin && !isManagerOwner) {
+          return res.status(403).json({ message: "Forbidden access" });
+        }
+
+        const result = await clubCollection.deleteOne({ _id: club._id });
+
+        res.json({
+          deletedCount: result.deletedCount,
+          message: "Club deleted successfully",
+        });
+      } catch (error) {
+        console.error("Delete club error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
     });
 
     app.get("/my-clubs", verifyFBToken, async (req, res) => {
@@ -352,7 +393,7 @@ async function run() {
       const { clubId, clubName, clubFee } = req.body;
       const userEmail = req.decoded_email;
 
-      if (!clubId || !clubName || !clubFee) {
+      if (!clubId || !clubName || clubFee === undefined || clubFee === null) {
         return res.status(400).send({ message: "Missing required fields" });
       }
 
@@ -549,6 +590,7 @@ async function run() {
       const query = {};
       if (req.query.email) query["eventCreator.email"] = req.query.email;
       if (req.query.status) query.status = req.query.status;
+      if (!req.query.status) query.status = "approved";
 
       const result = await eventCollection
         .find(query)
@@ -563,10 +605,43 @@ async function run() {
       res.send(result);
     });
 
-    app.delete("/events/:id", async (req, res) => {
-      const id = req.params.id;
-      const result = await eventCollection.deleteOne({ _id: new ObjectId(id) });
-      res.send(result);
+    app.delete("/events/:id", verifyFBToken, async (req, res) => {
+      const eventId = req.params.id;
+      const email = req.decoded_email;
+
+      if (!ObjectId.isValid(eventId)) {
+        return res.status(400).json({ message: "Invalid event ID" });
+      }
+
+      try {
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(401).json({ message: "Unauthorized" });
+        }
+
+        const event = await eventCollection.findOne({
+          _id: new ObjectId(eventId),
+        });
+
+        if (!event) {
+          return res.status(404).json({ message: "Event not found" });
+        }
+
+        const isAdmin = user.role === "admin";
+        const isManagerOwner =
+          user.role === "clubManager" && event.eventCreator?.email === email;
+
+        if (!isAdmin && !isManagerOwner) {
+          return res.status(403).json({ message: "Forbidden access" });
+        }
+
+        await eventCollection.deleteOne({ _id: event._id });
+
+        res.json({ message: "Event deleted successfully" });
+      } catch (error) {
+        console.error("Delete event error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
     });
 
     // Update Event (Manager)
@@ -883,7 +958,7 @@ async function run() {
       res.json({ role: user.role || "member" });
     });
 
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyFBToken, verifyAdmin, async (req, res) => {
       const searchText = req.query.searchText || "";
       const query = searchText
         ? {
@@ -953,7 +1028,7 @@ async function run() {
 
     /* ---------------------------- Stripe Payments --------------------------- */
 
-    app.post("/create-checkout-session", async (req, res) => {
+    app.post("/create-checkout-session", verifyFBToken, async (req, res) => {
       const { event, user } = req.body;
 
       try {
@@ -984,9 +1059,10 @@ async function run() {
     app.post("/create-club-membership-session", async (req, res) => {
       const { club, user } = req.body;
 
-      if (!club || !club.clubName || !club.membershipFee) {
+      if (!club || !club.clubName || club.membershipFee == null) {
         return res.status(400).json({ message: "Missing club data" });
       }
+
       if (!user || !user.email) {
         return res.status(400).json({ message: "Missing user email" });
       }
