@@ -21,7 +21,7 @@ admin.initializeApp({
 // Middleware
 app.use(
   cors({
-    origin: ["https://clubsphere-69228.web.app"],
+    origin: [`${process.env.SITE_DOMAIN}`],
     credentials: true,
     optionsSuccessStatus: 200,
   })
@@ -64,6 +64,7 @@ async function run() {
     const membershipCollection = db.collection("memberships");
     const eventParticipationCollection = db.collection("eventParticipants");
     const paymentCollection = db.collection("payments");
+    const blogCollection = db.collection("blogs");
 
     // Verify Admin
     const verifyAdmin = async (req, res, next) => {
@@ -1335,6 +1336,192 @@ async function run() {
       } catch (error) {
         console.error("Member dashboard error:", error);
         res.status(500).send({ message: "Failed to load member stats" });
+      }
+    });
+
+    /* -------------------------------------------------------------------------- */
+    /*                                !Blog API's                                 */
+    /* -------------------------------------------------------------------------- */
+
+    // Create a blog
+    app.post("/blogs", verifyFBToken, async (req, res) => {
+      try {
+        const blog = req.body;
+        const email = req.decoded_email;
+
+        const user = await userCollection.findOne({ email });
+        if (!user || user.role === "member") {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        const blogData = {
+          title: blog.title,
+          description: blog.description,
+          content: blog.content,
+          image: blog.image,
+          category: blog.category,
+          author: {
+            name: user.displayName || email,
+            email,
+            photo: user.photoURL || null,
+          },
+          status: "pending",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        const result = await blogCollection.insertOne(blogData);
+        res.send(result);
+      } catch (error) {
+        console.error("Create blog error:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Public API - approved blogs
+    app.get("/public/blogs", async (req, res) => {
+      try {
+        const blogs = await blogCollection
+          .find({ status: "approved" })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(blogs);
+      } catch (error) {
+        console.error("Get public blogs error:", error);
+        res.status(500).send({ message: "Failed to load blogs" });
+      }
+    });
+
+    // Get all blogs (for clubManager → own blogs, admin → all approved)
+    app.get("/blogs", verifyFBToken, async (req, res) => {
+      try {
+        const email = req.decoded_email;
+        const user = await userCollection.findOne({ email });
+
+        if (!user) return res.status(403).send({ message: "User not found" });
+
+        let query = { status: "approved" };
+
+        if (user.role === "clubManager") {
+          query["author.email"] = email; // only own blogs
+        }
+        // admin gets all approved blogs
+
+        const blogs = await blogCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(blogs);
+      } catch (error) {
+        console.error("Get blogs error:", error);
+        res.status(500).send({ message: "Failed to load blogs" });
+      }
+    });
+
+    // Get single blog by ID
+    app.get("/blogs/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid blog ID" });
+        }
+
+        const blog = await blogCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!blog) return res.status(404).send({ message: "Blog not found" });
+
+        res.send(blog);
+      } catch (error) {
+        console.error("Get blog error:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Admin: update blog status
+    app.patch(
+      "/admin/blogs/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { status } = req.body;
+
+          if (!["approved", "rejected"].includes(status)) {
+            return res.status(400).send({ message: "Invalid status" });
+          }
+
+          const result = await blogCollection.updateOne(
+            { _id: new ObjectId(req.params.id) },
+            {
+              $set: {
+                status,
+                updatedAt: new Date().toISOString(),
+              },
+            }
+          );
+
+          res.send(result);
+        } catch (error) {
+          console.error("Update blog status error:", error);
+          res.status(500).send({ message: "Server error" });
+        }
+      }
+    );
+
+    // Admin: get all blogs
+    app.get("/admin/blogs", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const blogs = await blogCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(blogs);
+      } catch (error) {
+        console.error("Get all admin blogs error:", error);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
+    // Delete blog (admin → any blog, clubManager → own blogs)
+    app.delete("/blogs/:id", verifyFBToken, async (req, res) => {
+      try {
+        const blogId = req.params.id;
+        const email = req.decoded_email;
+
+        if (!ObjectId.isValid(blogId)) {
+          return res.status(400).send({ message: "Invalid blog ID" });
+        }
+
+        const blog = await blogCollection.findOne({
+          _id: new ObjectId(blogId),
+        });
+        if (!blog) return res.status(404).send({ message: "Blog not found" });
+
+        const user = await userCollection.findOne({ email });
+        if (!user) return res.status(403).send({ message: "User not found" });
+
+        if (user.role === "admin") {
+          // admin can delete any blog
+        } else if (user.role === "clubManager") {
+          // clubManager can delete only own blog
+          if (blog.author.email !== email) {
+            return res
+              .status(403)
+              .send({ message: "You are not allowed to delete this blog" });
+          }
+        } else {
+          return res.status(403).send({ message: "Forbidden" });
+        }
+
+        const result = await blogCollection.deleteOne({
+          _id: new ObjectId(blogId),
+        });
+        res.send({ deletedCount: result.deletedCount });
+      } catch (error) {
+        console.error("Delete blog error:", error);
+        res.status(500).send({ message: "Server error" });
       }
     });
 
